@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import type { FormEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createClient, type Session } from '@supabase/supabase-js'
 
 type Customer = {
   id: number
@@ -156,11 +157,26 @@ const money = (amount: number) =>
     maximumFractionDigits: 2,
   }).format(amount)
 
-function App() {
+function DashboardApp({ onSignOut, userEmail }: { onSignOut: () => void; userEmail: string }) {
   const [activePage, setActivePage] = useState('Dashboard')
   const [search, setSearch] = useState('')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [voiceInfoOpen, setVoiceInfoOpen] = useState(false)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [readNotifications, setReadNotifications] = useState<string[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('khatavoice_read_notifications') || '[]')
+      return Array.isArray(saved) ? saved.filter((item): item is string => typeof item === 'string') : []
+    } catch {
+      return []
+    }
+  })
+  const [shopSettings, setShopSettings] = useState(() => {
+    try { return { shopName: 'Shree Kirana Store', ownerName: 'Shopkeeper', phone: '', address: '', language: 'Hindi', currency: 'INR', lowStock: 5, reminders: true, sound: true, ...(JSON.parse(localStorage.getItem('khatavoice_settings') || '{}')) } }
+    catch { return { shopName: 'Shree Kirana Store', ownerName: 'Shopkeeper', phone: '', address: '', language: 'Hindi', currency: 'INR', lowStock: 5, reminders: true, sound: true } }
+  })
+  const [settingsSaved, setSettingsSaved] = useState(false)
+
 
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
@@ -272,6 +288,40 @@ function App() {
       console.error('Could not save products:', error)
     }
   }, [products])
+
+  // Derive notification items only after customer and product state exists.
+  const notifications = useMemo(() => [
+    ...customers
+      .filter((customer) => customer.balance > 0)
+      .sort((a, b) => b.balance - a.balance)
+      .slice(0, 3)
+      .map((customer) => ({
+        id: `balance-${customer.id}`,
+        title: `${customer.name} has an outstanding balance`,
+        detail: `${money(customer.balance)} is pending in their khata.`,
+        kind: 'balance' as const,
+      })),
+    ...products
+      .filter((product) => product.stock <= Number(shopSettings.lowStock || 5))
+      .map((product) => ({
+        id: `stock-${product.id}`,
+        title: `Low stock: ${product.name}`,
+        detail: `Only ${product.stock} ${product.unit} remaining.`,
+        kind: 'stock' as const,
+      })),
+  ], [customers, products, shopSettings.lowStock])
+  const unreadCount = notifications.filter((notification) => !readNotifications.includes(notification.id)).length
+  const markAllRead = () => {
+    const ids = notifications.map((notification) => notification.id)
+    setReadNotifications(ids)
+    localStorage.setItem('khatavoice_read_notifications', JSON.stringify(ids))
+  }
+  const saveSettings = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    localStorage.setItem('khatavoice_settings', JSON.stringify(shopSettings))
+    setSettingsSaved(true)
+    window.setTimeout(() => setSettingsSaved(false), 2500)
+  }
   const [showProductForm, setShowProductForm] = useState(false)
   const [editingProductId, setEditingProductId] = useState<number | null>(null)
   const [productName, setProductName] = useState('')
@@ -324,9 +374,9 @@ function App() {
       try {
         const [customersResponse, productsResponse, transactionsResponse] =
           await Promise.all([
-            fetch('http://localhost:8000/api/customers'),
-            fetch('http://localhost:8000/api/products'),
-            fetch('http://localhost:8000/api/transactions'),
+            fetch('https://khatavoice-ai.onrender.com/api/customers'),
+            fetch('https://khatavoice-ai.onrender.com/api/products'),
+            fetch('https://khatavoice-ai.onrender.com/api/transactions'),
           ])
 
         if (
@@ -486,7 +536,7 @@ function App() {
     setParsedTransaction(null)
 
     try {
-      const response = await fetch('http://localhost:8000/api/parse-transaction', {
+      const response = await fetch('https://khatavoice-ai.onrender.com/api/parse-transaction', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -603,7 +653,7 @@ function App() {
     setVoiceError('')
 
     try {
-      const response = await fetch('http://localhost:8000/api/transcribe', {
+      const response = await fetch('https://khatavoice-ai.onrender.com/api/transcribe', {
         method: 'POST',
         body: formData,
       })
@@ -749,7 +799,7 @@ function App() {
     setFormError('')
 
     try {
-      const response = await fetch('http://localhost:8000/api/customers', {
+      const response = await fetch('https://khatavoice-ai.onrender.com/api/customers', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -855,8 +905,8 @@ function App() {
     try {
       const isEditing = editingProductId !== null
       const endpoint = isEditing
-        ? `http://localhost:8000/api/products/${editingProductId}`
-        : 'http://localhost:8000/api/products'
+        ? `https://khatavoice-ai.onrender.com/api/products/${editingProductId}`
+        : 'https://khatavoice-ai.onrender.com/api/products'
 
       const response = await fetch(endpoint, {
         method: isEditing ? 'PUT' : 'POST',
@@ -900,7 +950,7 @@ function App() {
     if (!product || !window.confirm(`Delete ${product.name} from your catalogue?`)) return
 
     try {
-      const response = await fetch(`http://localhost:8000/api/products/${id}`, {
+      const response = await fetch(`https://khatavoice-ai.onrender.com/api/products/${id}`, {
         method: 'DELETE',
       })
       const result = await response.json()
@@ -976,7 +1026,7 @@ function App() {
     setLedgerError('')
 
     try {
-      const response = await fetch('http://localhost:8000/api/confirm-transaction', {
+      const response = await fetch('https://khatavoice-ai.onrender.com/api/confirm-transaction', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1131,7 +1181,7 @@ function App() {
 
     try {
       // Save to PostgreSQL first. Only update the UI after the database confirms.
-      const response = await fetch('http://localhost:8000/api/confirm-transaction', {
+      const response = await fetch('https://khatavoice-ai.onrender.com/api/confirm-transaction', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1298,7 +1348,7 @@ function App() {
               Learn more
             </button>
           </div>
-          <button className="mt-4 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-slate-500 hover:bg-slate-50">
+          <button onClick={onSignOut} className="mt-4 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-slate-500 hover:bg-slate-50">
             <LogOut size={18} />
             Sign out
           </button>
@@ -1324,21 +1374,25 @@ function App() {
           </div>
 
           <div className="flex items-center gap-3 sm:gap-5">
-            <button
-              aria-label="Notifications"
-              className="relative rounded-full p-2 text-slate-500 hover:bg-slate-100"
-            >
-              <Bell size={20} />
-              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500" />
-            </button>
+            <div className="relative">
+              <button onClick={() => setNotificationsOpen(v=>!v)} aria-label="Notifications" className="relative rounded-full p-2 text-slate-500 hover:bg-slate-100">
+                <Bell size={20} />
+                {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">{unreadCount}</span>}
+              </button>
+              {notificationsOpen && <div className="absolute right-0 z-50 mt-3 w-[min(92vw,360px)] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+                <div className="flex items-center justify-between"><h3 className="font-bold text-slate-900">Notifications</h3><button onClick={markAllRead} className="text-xs font-semibold text-green-700">Mark all read</button></div>
+                <div className="mt-3 max-h-80 space-y-2 overflow-y-auto">{notifications.length ? notifications.map(n=><button key={n.id} onClick={()=>{const ids=[...readNotifications,n.id];setReadNotifications(ids);localStorage.setItem('khatavoice_read_notifications',JSON.stringify(ids))}} className={`w-full rounded-xl p-3 text-left ${readNotifications.includes(n.id)?'bg-slate-50':'bg-green-50'}`}><p className="text-sm font-semibold text-slate-800">{n.title}</p><p className="mt-1 text-xs text-slate-500">{n.detail}</p></button>) : <p className="py-6 text-center text-sm text-slate-500">You're all caught up.</p>}</div>
+                <button onClick={()=>setNotificationsOpen(false)} className="mt-3 w-full rounded-lg border border-slate-200 py-2 text-sm">Close</button>
+              </div>}
+            </div>
             <div className="hidden h-8 w-px bg-slate-200 sm:block" />
             <button className="flex items-center gap-2">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100 text-sm font-bold text-green-800">
                 SK
               </div>
               <div className="hidden text-left sm:block">
-                <p className="text-sm font-semibold text-slate-800">Shree Kirana Store</p>
-                <p className="text-xs text-slate-500">Shopkeeper</p>
+                <p className="text-sm font-semibold text-slate-800">{shopSettings.shopName}</p>
+                <p className="text-xs text-slate-500">{userEmail || shopSettings.ownerName}</p>
               </div>
               <ChevronDown size={16} className="hidden text-slate-400 sm:block" />
             </button>
@@ -2060,12 +2114,20 @@ function App() {
           )}
 
           {activePage === 'Settings' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-8">
-              <Settings size={34} className="text-green-700" />
-              <h3 className="mt-4 text-lg font-bold text-slate-900">Shop settings</h3>
-              <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">We'll configure your shop profile, preferred languages and account settings here.</p>
-              <span className="mt-5 inline-flex rounded-full bg-green-50 px-3 py-1.5 text-xs font-semibold text-green-800">Coming in the next development stage</span>
-            </section>
+            <form onSubmit={saveSettings} className="space-y-6">
+              <section className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8">
+                <div className="mb-6"><h3 className="text-lg font-bold text-slate-900">Shop profile</h3><p className="mt-1 text-sm text-slate-500">Manage the details displayed in your KhataVoice workspace.</p></div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {[['shopName','Shop name'],['ownerName','Owner name'],['phone','Phone number'],['address','Shop address']].map(([key,label])=><label key={key} className="block text-sm font-medium text-slate-700">{label}<input value={(shopSettings as any)[key]} onChange={e=>setShopSettings((v:any)=>({...v,[key]:e.target.value}))} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-green-600" placeholder={label}/></label>)}
+                </div>
+              </section>
+              <section className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8"><h3 className="text-lg font-bold text-slate-900">Preferences</h3><div className="mt-5 grid gap-5 sm:grid-cols-2">
+                <label className="text-sm font-medium text-slate-700">Preferred voice language<select value={shopSettings.language} onChange={e=>setShopSettings((v:any)=>({...v,language:e.target.value}))} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3"><option>Hindi</option><option>Marathi</option><option>English</option><option>Hinglish</option><option>Auto detect</option></select></label>
+                <label className="text-sm font-medium text-slate-700">Currency<select value={shopSettings.currency} onChange={e=>setShopSettings((v:any)=>({...v,currency:e.target.value}))} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3"><option value="INR">Indian Rupee (₹)</option></select></label>
+                <label className="text-sm font-medium text-slate-700">Low-stock alert threshold<input type="number" min="0" value={shopSettings.lowStock} onChange={e=>setShopSettings((v:any)=>({...v,lowStock:Number(e.target.value)}))} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3"/></label>
+              </div><div className="mt-6 space-y-4">{[['reminders','Enable payment reminders'],['sound','Enable notification sounds']].map(([key,label])=><label key={key} className="flex items-center justify-between rounded-xl bg-slate-50 p-4 text-sm text-slate-700">{label}<input type="checkbox" checked={Boolean((shopSettings as any)[key])} onChange={e=>setShopSettings((v:any)=>({...v,[key]:e.target.checked}))} className="h-4 w-4 accent-green-700"/></label>)}</div></section>
+              <div className="flex items-center gap-3"><button type="submit" className="rounded-xl bg-green-800 px-6 py-3 text-sm font-semibold text-white hover:bg-green-900">Save settings</button>{settingsSaved && <span className="text-sm font-medium text-green-700">Settings saved on this device.</span>}</div>
+            </form>
           )}
 
           <footer className="pb-4 text-center text-xs text-slate-400">
@@ -2358,6 +2420,38 @@ function StatCard({ title, value, detail, icon, color }: StatCardProps) {
       <p className="mt-1 text-xs text-slate-500">{detail}</p>
     </div>
   )
+}
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+const authClient = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null
+
+function App() {
+  const [session, setSession] = useState<Session | null>(null)
+  const [checking, setChecking] = useState(true)
+  const [mode, setMode] = useState<'login'|'signup'>('login')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!authClient) { setChecking(false); return }
+    authClient.auth.getSession().then(({data})=>{setSession(data.session);setChecking(false)})
+    const {data:{subscription}}=authClient.auth.onAuthStateChange((_event,next)=>setSession(next))
+    return ()=>subscription.unsubscribe()
+  }, [])
+  const submitAuth = async (event: FormEvent) => {
+    event.preventDefault(); if(!authClient)return; setBusy(true);setAuthError('')
+    const result = mode==='signup' ? await authClient.auth.signUp({email,password}) : await authClient.auth.signInWithPassword({email,password})
+    setBusy(false)
+    if(result.error){setAuthError(result.error.message);return}
+    if(mode==='signup' && !result.data.session) setAuthError('Account created. Check your email to confirm your address, then log in.')
+  }
+  const signOut = async () => { if(authClient) await authClient.auth.signOut() }
+  if(checking) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Loading your secure workspace…</div>
+  if(!authClient) return <div className="flex min-h-screen items-center justify-center bg-[#f6f8f5] p-5"><div className="max-w-lg rounded-2xl bg-white p-8 shadow-sm"><h1 className="text-2xl font-bold text-green-900">KhataVoice AI setup required</h1><p className="mt-3 text-sm leading-6 text-slate-600">Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to the frontend environment, then restart the development server. Never put the Supabase service-role key in the frontend.</p></div></div>
+  if(!session) return <div className="flex min-h-screen items-center justify-center bg-[#f6f8f5] p-5"><form onSubmit={submitAuth} className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"><div className="mb-7"><div className="flex h-12 w-12 items-center justify-center rounded-xl bg-green-800 text-white"><ShoppingBag/></div><h1 className="mt-5 text-2xl font-bold text-green-950">KhataVoice AI</h1><p className="mt-1 text-sm text-slate-500">{mode==='login'?'Welcome back. Sign in to your shop.':'Create your shopkeeper account.'}</p></div><label className="block text-sm font-medium text-slate-700">Email<input type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="you@example.com"/></label><label className="mt-4 block text-sm font-medium text-slate-700">Password<input type="password" required minLength={6} value={password} onChange={e=>setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="At least 6 characters"/></label>{authError&&<p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{authError}</p>}<button disabled={busy} className="mt-6 w-full rounded-xl bg-green-800 py-3 font-semibold text-white disabled:opacity-60">{busy?'Please wait…':mode==='login'?'Sign in':'Create account'}</button><p className="mt-5 text-center text-sm text-slate-500">{mode==='login'?"New to KhataVoice?":"Already registered?"} <button type="button" onClick={()=>{setMode(mode==='login'?'signup':'login');setAuthError('')}} className="font-semibold text-green-800">{mode==='login'?'Create an account':'Sign in'}</button></p></form></div>
+  return <DashboardApp onSignOut={signOut} userEmail={session.user.email || ''}/>
 }
 
 export default App
