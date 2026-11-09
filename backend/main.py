@@ -62,6 +62,8 @@ app.add_middleware(
         "http://localhost:5174",
         "https://khata-voice-dk0842lah-aayeshash2412-1885.vercel.app",
     ],
+    # Also allow Vercel preview deployments for this frontend.
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
